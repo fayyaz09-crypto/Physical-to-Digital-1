@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Physical to Digital World — Williams %R Scanner</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#121d30;--line:#26364f;--text:#e8eef8;--muted:#9aabc3;--green:#20c879;--red:#ff6577;--blue:#5ca7ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Arial,sans-serif}
+.wrap{max-width:1050px;margin:28px auto;padding:0 16px}.head{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+.logo{width:48px;height:48px;border-radius:12px;background:#173b36;display:grid;place-items:center;color:#39df9b;font-weight:800;font-size:22px}
+h1{font-size:22px;margin:0} .sub{color:var(--muted);font-size:13px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin:14px 0}
+.controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+button{border:0;border-radius:9px;padding:11px 18px;background:var(--green);color:#062316;font-weight:700;cursor:pointer}
+button:disabled{opacity:.55;cursor:wait}
+select{background:#0b1527;color:var(--text);border:1px solid var(--line);padding:10px;border-radius:8px}
+.statrow{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;color:var(--muted);font-size:13px}
+.stat strong{color:var(--text);font-size:17px;display:block}
+.status{margin-top:12px;color:var(--muted);font-size:13px;min-height:20px}
+.progress{height:7px;background:#26364f;border-radius:9px;overflow:hidden;margin-top:10px}.bar{height:100%;width:0;background:var(--green);transition:width .2s}
+table{width:100%;border-collapse:collapse;margin-top:8px}th,td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--line)}th{color:var(--muted);font-size:12px;text-transform:uppercase}
+.buy{color:var(--green);font-weight:800}.empty{text-align:center;color:var(--muted);padding:28px}
+a{color:#8fc2ff;text-decoration:none}a:hover{text-decoration:underline}
+.note{color:var(--muted);font-size:12px;margin-top:12px}
+@media(max-width:620px){h1{font-size:18px}th,td{padding:10px 6px;font-size:13px}.hide-mobile{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div class="logo">PD</div>
+    <div><h1>Physical to Digital World</h1><div class="sub">Williams %R — 1 Hour BUY Scanner</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="scanBtn" onclick="startScan()">Scan Now</button>
+      <label>Coins to scan:
+        <select id="limit">
+          <option value="100">Top 100 by 24h volume</option>
+          <option value="150" selected>Top 150 by 24h volume</option>
+          <option value="250">Top 250 by 24h volume</option>
+          <option value="0">All USDT spot pairs</option>
+        </select>
+      </label>
+    </div>
+    <div class="statrow">
+      <div class="stat"><strong id="scanned">0</strong>Scanned</div>
+      <div class="stat"><strong id="found">0</strong>BUY signals</div>
+      <div class="stat"><strong>1H</strong>Timeframe</div>
+      <div class="stat"><strong>14 / 3</strong>Length / Smoothing</div>
+    </div>
+    <div class="progress"><div class="bar" id="bar"></div></div>
+    <div class="status" id="status">Press “Scan Now” to start.</div>
+  </div>
+
+  <div class="panel">
+    <h2 style="font-size:17px;margin:0">BUY Signals</h2>
+    <div id="results" class="empty">No scan has been run yet.</div>
+    <div class="note">Signal rule: previous completed 1H Smoothed %R is at or below -80, and the latest completed 1H Smoothed %R crosses above -80. The live, unfinished candle is ignored.</div>
+  </div>
+  <div class="note">Data source: Binance public Spot market data. This page does not place trades or connect to your wallet.</div>
+</div>
+
+<script>
+const API = "https://api.binance.com";
+const CONCURRENCY = 6;
+const DELAY_MS = 90;
+let running = false;
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function setStatus(s){ document.getElementById("status").textContent=s; }
+function setProgress(done,total){
+  document.getElementById("scanned").textContent=done;
+  document.getElementById("bar").style.width=(total ? (done/total*100) : 0)+"%";
+}
+async function getJSON(url){
+  const response = await fetch(url);
+  if(!response.ok) throw new Error("HTTP "+response.status);
+  return response.json();
+}
+function williamsR(candles, period=14){
+  const raw=[];
+  for(let i=period-1;i<candles.length;i++){
+    let highest=-Infinity, lowest=Infinity;
+    for(let j=i-period+1;j<=i;j++){
+      highest=Math.max(highest, Number(candles[j][2]));
+      lowest=Math.min(lowest, Number(candles[j][3]));
+    }
+    const close=Number(candles[i][4]);
+    raw.push(highest===lowest ? null : 100*(close-highest)/(highest-lowest));
+  }
+  const smoothed=[];
+  for(let i=2;i<raw.length;i++){
+    const values=raw.slice(i-2,i+1);
+    smoothed.push(values.some(v=>v===null) ? null : values.reduce((a,b)=>a+b,0)/3);
+  }
+  return smoothed;
+}
+async function checkSymbol(symbol){
+  const candles=await getJSON(`${API}/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=1h&limit=30`);
+  // Binance's last kline is normally still forming. Ignore it and use completed candles only.
+  const completed=candles.slice(0,-1);
+  const values=williamsR(completed,14);
+  if(values.length<2) return null;
+  const previous=values[values.length-2], latest=values[values.length-1];
+  if(previous!==null && latest!==null && previous<=-80 && latest>-80){
+    return {symbol, value:latest, closeTime:Number(completed[completed.length-1][6])};
+  }
+  return null;
+}
+async function startScan(){
+  if(running) return;
+  running=true;
+  const button=document.getElementById("scanBtn");
+  button.disabled=true; button.textContent="Scanning…";
+  document.getElementById("results").innerHTML='<div class="empty">Scanning market…</div>';
+  document.getElementById("found").textContent="0";
+  setProgress(0,1);
+  try{
+    setStatus("Loading Binance USDT spot pairs…");
+    const [exchangeInfo,tickers]=await Promise.all([
+      getJSON(`${API}/api/v3/exchangeInfo`),
+      getJSON(`${API}/api/v3/ticker/24hr`)
+    ]);
+    const volumeMap=new Map(tickers.map(t=>[t.symbol,Number(t.quoteVolume)||0]));
+    let symbols=exchangeInfo.symbols
+      .filter(s=>s.status==="TRADING" && s.isSpotTradingAllowed && s.quoteAsset==="USDT" && !s.symbol.includes("UPUSDT") && !s.symbol.includes("DOWNUSDT"))
+      .map(s=>s.symbol)
+      .sort((a,b)=>(volumeMap.get(b)||0)-(volumeMap.get(a)||0));
+    const limit=Number(document.getElementById("limit").value);
+    if(limit>0) symbols=symbols.slice(0,limit);
+    const total=symbols.length;
+    let next=0,done=0,signals=[],errors=0;
+    setProgress(0,total);
+    setStatus(`Scanning ${total} USDT spot pairs on 1H…`);
+    async function worker(){
+      while(true){
+        const index=next++;
+        if(index>=total) return;
+        const symbol=symbols[index];
+        try{
+          const result=await checkSymbol(symbol);
+          if(result) signals.push(result);
+        }catch(e){ errors++; }
+        done++;
+        setProgress(done,total);
+        if(done%10===0 || done===total){
+          setStatus(`Scanned ${done} / ${total} pairs${errors ? ` · ${errors} data errors` : ""}`);
+          document.getElementById("found").textContent=signals.length;
+        }
+        await sleep(DELAY_MS);
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(CONCURRENCY,total)},worker));
+    signals.sort((a,b)=>b.closeTime-a.closeTime);
+    document.getElementById("found").textContent=signals.length;
+    if(signals.length){
+      document.getElementById("results").innerHTML=`<table><thead><tr><th>Coin</th><th>Signal</th><th>Smoothed %R</th><th class="hide-mobile">Chart</th></tr></thead><tbody>${signals.map(s=>{
+        const pair=s.symbol.replace("USDT","/USDT");
+        const chart=`https://www.tradingview.com/chart/?symbol=BINANCE%3A${encodeURIComponent(s.symbol)}`;
+        return `<tr><td><strong>${pair}</strong></td><td class="buy">BUY</td><td>${s.value.toFixed(2)}</td><td class="hide-mobile"><a href="${chart}" target="_blank" rel="noopener">TradingView ↗</a></td></tr>`;
+      }).join("")}</tbody></table>`;
+    }else{
+      document.getElementById("results").innerHTML='<div class="empty">No confirmed BUY crossover found in this scan.</div>';
+    }
+    setStatus(`Scan complete: ${done} pairs checked, ${signals.length} BUY signal(s).${errors ? ` ${errors} pair(s) could not be checked; try again later.` : ""}`);
+  }catch(e){
+    setStatus("Could not load Binance market data. Please try again. ("+e.message+")");
+    document.getElementById("results").innerHTML='<div class="empty">Scan failed. Check your internet connection and try again.</div>';
+  }finally{
+    running=false;button.disabled=false;button.textContent="Scan Now";
+  }
+}
+</script>
+</body>
+</html>
