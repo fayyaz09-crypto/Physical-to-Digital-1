@@ -58,7 +58,7 @@ a{color:#8fc2ff;text-decoration:none}a:hover{text-decoration:underline}
   <div class="panel">
     <h2 style="font-size:17px;margin:0">BUY Signals</h2>
     <div id="results" class="empty">No scan has been run yet.</div>
-    <div class="note">Signal rule: previous completed 1H Smoothed %R is at or below -80, and the latest completed 1H Smoothed %R crosses above -80. The live, unfinished candle is ignored.</div>
+    <div class="note">Signal rule: previous completed 1H Smoothed %R is below -81, and the latest completed 1H Smoothed %R moves up into the -81 to -75 range. The live, unfinished candle is ignored.</div>
   </div>
   <div class="note">Data source: Binance public Spot market data. This page does not place trades or connect to your wallet.</div>
 </div>
@@ -105,7 +105,9 @@ async function checkSymbol(symbol){
   const values=williamsR(completed,14);
   if(values.length<2) return null;
   const previous=values[values.length-2], latest=values[values.length-1];
-  if(previous!==null && latest!==null && latest>-80 && latest<=-76){
+
+  // BUY only when Smoothed %R rises from below -81 into the -81 to -75 range.
+  if(previous!==null && latest!==null && previous < -81 && latest >= -81 && latest <= -75){
     return {symbol, value:latest, closeTime:Number(completed[completed.length-1][6])};
   }
   return null;
