@@ -105,7 +105,7 @@ async function checkSymbol(symbol){
   const values=williamsR(completed,14);
   if(values.length<2) return null;
   const previous=values[values.length-2], latest=values[values.length-1];
-  if(previous!==null && latest!==null && previous<=-80 && latest>-80){
+  if(previous!==null && latest!==null && latest>-80 && latest<=-76){
     return {symbol, value:latest, closeTime:Number(completed[completed.length-1][6])};
   }
   return null;
